@@ -28,7 +28,86 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const TimeStudyPage(title: 'Time Study Tool'),
+
+      // ここでホーム画面をSystemSelectPageに変更
+      home: const SystemSelectPage(),
+      routes: {
+        '/timeStudy': (context) => const TimeStudyPage(title: '作業時間計測'),
+        '/dataExport': (context) => const DataExportPage(),
+        '/timeDisplay': (context) => const TimeDisplayPage(),
+        '/settings': (context) => const SettingsPage(),
+      },
+    );
+  }
+}
+
+/// ----【ここからシステム選択画面の追加】---- ///
+class SystemSelectPage extends StatelessWidget {
+  const SystemSelectPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('システム選択'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _menuButton(context, '作業時間計測', '/timeStudy'),
+            const SizedBox(height: 20),
+            _menuButton(context, '計測データ出力', '/dataExport'),
+            const SizedBox(height: 20),
+            _menuButton(context, '作業時間表示', '/timeDisplay'),
+            const SizedBox(height: 20),
+            _menuButton(context, '設定', '/settings'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _menuButton(BuildContext context, String text, String route) {
+    return SizedBox(
+      width: 220,
+      height: 48,
+      child: ElevatedButton(
+        onPressed: () => Navigator.pushNamed(context, route),
+        child: Text(text, style: const TextStyle(fontSize: 18)),
+      ),
+    );
+  }
+}
+
+/// ダミー画面（今後実装予定の各画面は空ページでOK） ///
+class DataExportPage extends StatelessWidget {
+  const DataExportPage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('計測データ出力')),
+      body: const Center(child: Text('ここにデータ出力機能を実装')),
+    );
+  }
+}
+class TimeDisplayPage extends StatelessWidget {
+  const TimeDisplayPage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('作業時間表示')),
+      body: const Center(child: Text('ここに作業時間表示を実装')),
+    );
+  }
+}
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('設定')),
+      body: const Center(child: Text('ここに設定画面を実装')),
     );
   }
 }
