@@ -7,6 +7,41 @@ import 'dart:convert';
 import 'package:csv/csv.dart'; // ←★これがCsvToListConverter/ListToCsvConverter用
 import 'package:share_plus/share_plus.dart';  // 追加
 import 'package:fl_chart/fl_chart.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart' as p;
+
+//sqlite構成
+class DBHelper {
+  static Future<Database> open() async {
+    final dbPath = await getDatabasesPath();
+    final path = p.join(dbPath, 'time_study.mobile');
+
+    return openDatabase(
+      path,
+      version: 1,
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS task_table (
+            task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_name TEXT,
+            task_type_no INTEGER,
+            task_category_no INTEGER
+          );
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS time_study (
+            timestudy_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER,
+            start TEXT,
+            stop TEXT,
+            helpno INTEGER,
+            FOREIGN KEY(task_id) REFERENCES task_table(task_id)
+          );
+        ''');
+      },
+    );
+  }
+}
 
 
 void main() => runApp(const MyApp());
@@ -23,7 +58,7 @@ class MyApp extends StatelessWidget {
   }
 }
 
-//メインメニューページ
+//画面：メインメニュー
 class MenuPage extends StatelessWidget {
   const MenuPage({super.key});
   @override
@@ -37,7 +72,7 @@ class MenuPage extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // 1つ目：作業時間計測
+            //作業時間計測ボタン
             SizedBox(
               width: 220,
               height: 48,
@@ -49,7 +84,7 @@ class MenuPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            // 2つ目：計測データ出力
+            //計測データ出力ボタン
             SizedBox(
               width: 220,
               height: 48,
@@ -62,7 +97,7 @@ class MenuPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            // 3つ目：作業時間表示
+            //作業時間表示ボタン
             SizedBox(
               width: 220,
               height: 48,
@@ -74,7 +109,7 @@ class MenuPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            // 4つ目：設定
+            //設定ボタン
             SizedBox(
               width: 220,
               height: 48,
@@ -92,7 +127,7 @@ class MenuPage extends StatelessWidget {
   }
 }
 
-// 設定画面
+//画面：設定
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
   @override
@@ -111,7 +146,7 @@ class SettingsPage extends StatelessWidget {
   }
 }
 
-// 計測データ出力画面
+//画面：計測データ出力
 class DataExportPage extends StatelessWidget {
   const DataExportPage({super.key});
   @override
@@ -170,7 +205,7 @@ class DataExportPage extends StatelessWidget {
   }
 }
 
-// ▼▼ メール送信機能の実装 ▼▼
+//▼機能：メール送信
 Future<void> sendLatestCsvByMail(BuildContext context) async {
   try {
     final directory = await getApplicationDocumentsDirectory();
@@ -197,7 +232,7 @@ Future<void> sendLatestCsvByMail(BuildContext context) async {
   }
 }
 
-//計測データ出力画面
+//画面：作業時間表示
 class TimeDisplayPage extends StatelessWidget {
   const TimeDisplayPage({super.key});
 
@@ -238,7 +273,7 @@ class TimeDisplayPage extends StatelessWidget {
     );
   }
 
-  // CSVを読み込んでデータを抽出
+  // ▼機能：DBを読み込んでデータを抽出
   Future<List<_TaskBarData>> _loadCsvData() async {
     final directory = await getApplicationDocumentsDirectory();
     final path = '${directory.path}/time_study_data.csv';
@@ -360,7 +395,7 @@ class BarChartSample extends StatelessWidget {
 }
 
 
-// 作業設定一覧画面
+// 画面：作業設定一覧
 class TaskSettingListPage extends StatefulWidget {
   const TaskSettingListPage({super.key});
 
@@ -424,7 +459,7 @@ class _TaskSettingListPageState extends State<TaskSettingListPage> {
   }
 }
 
-// ----- 作業ボタン編集画面 -----
+//画面：作業ボタン編集
 class TaskEditPage extends StatefulWidget {
   final Map<String, dynamic> task;
   const TaskEditPage({super.key, required this.task});
@@ -578,8 +613,18 @@ final csv = const ListToCsvConverter().convert(rows);
 await file.writeAsString(csv, encoding: utf8);
 }
 
+//機能：sqlite登録
+Future<int> insertTimeStudy(int taskId, String start, String stop, int helpno) async {
+  final db = await DBHelper.open();
+  return await db.insert('time_study', {
+    'task_id': taskId,
+    'start': start,
+    'stop': stop,
+    'helpno': helpno,
+  });
+}
 
-// 1. 計測開始・終了画面
+// ▼機能：計測開始・終了
 class TimerPage extends StatefulWidget {
   const TimerPage({super.key});
   @override
@@ -612,7 +657,7 @@ class _TimerPageState extends State<TimerPage> {
 
   void _end() async {
     _timer?.cancel();
-    // 3. 終了確認モーダル
+    //終了確認モーダル
     bool? ok = await showOkCancelModal(
         context,
         message: "計測を終了します。よろしいですか。",
@@ -679,8 +724,7 @@ class _TimerPageState extends State<TimerPage> {
   }
 }
 
-// 4. 作業選択画面
-// 4. 作業選択画面
+//▼機能：作業選択
 class TaskSelectPage extends StatefulWidget {
   final DateTime startTime;
   final DateTime endTime;
@@ -737,7 +781,10 @@ class _TaskSelectPageState extends State<TaskSelectPage> {
                   cancelLabel: "キャンセル",
                 );
                 if (ok == true) {
-                  await saveTaskToCsv(taskName, widget.startTime, widget.endTime);
+                  final taskId = task['id'] ?? task['task_id'];
+                  final start = widget.startTime.toIso8601String();
+                  final stop  = widget.endTime.toIso8601String();
+                  await insertTimeStudy(taskId, start, stop, 0); // helpno=0
 
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -789,7 +836,7 @@ Future<bool?> showOkCancelModal(BuildContext context,
   );
 }
 
-/// CSV保存
+///機能：CSV変換
 Future<void> saveTaskToCsv(String taskName, DateTime start, DateTime stop) async {
   // 1. 業務リストをcsvから取得
   final taskList = await loadTaskSettings(); // これでList<Map<String, dynamic>>取得
