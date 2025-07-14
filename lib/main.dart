@@ -127,26 +127,197 @@ class MenuPage extends StatelessWidget {
   }
 }
 
-//画面：設定
-class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key});
+// 1-1.機能：計測開始/終了
+class TimerPage extends StatefulWidget {
+  const TimerPage({super.key});
+  @override
+  State<TimerPage> createState() => _TimerPageState();
+}
+class _TimerPageState extends State<TimerPage> {
+  DateTime? _startTime;
+  Duration _elapsed = Duration.zero;
+  bool _isMeasuring = false;
+  Timer? _timer;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _start() {
+    setState(() {
+      _startTime = DateTime.now();
+      _isMeasuring = true;
+      _elapsed = Duration.zero;
+    });
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      setState(() {
+        _elapsed = DateTime.now().difference(_startTime!);
+      });
+    });
+  }
+
+  void _end() async {
+    _timer?.cancel();
+    //終了確認モーダル
+    bool? ok = await showOkCancelModal(
+        context,
+        message: "計測を終了します。よろしいですか。",
+        okLabel: "OK",
+        cancelLabel: "キャンセル"
+    );
+    if (ok == true) {
+      if (_startTime != null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => TaskSelectPage(startTime: _startTime!, endTime: DateTime.now()),
+          ),
+        );
+      }
+    } else {
+      // キャンセルなら計測再開
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+        setState(() {
+          _elapsed = DateTime.now().difference(_startTime!);
+        });
+      });
+    }
+  }
+
+  //1-1.画面：計測開始・終了
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(backgroundColor: Colors.blue, title: const Text('Time study tool')),
-      body: Center(
-        child: ElevatedButton(
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const TaskSettingListPage()));
-          },
-          child: const Text('作業設定一覧へ', style: TextStyle(fontSize: 20)),
-        ),
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            color: Colors.grey.shade300,
+            padding: const EdgeInsets.all(12),
+            child: Text(
+              '[経過時間：${_format(_elapsed)}]',
+              style: const TextStyle(fontSize: 24),
+            ),
+          ),
+          const Spacer(),
+          Center(
+            child: !_isMeasuring
+                ? ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+              onPressed: _start,
+              child: const Text('計測開始', style: TextStyle(fontSize: 22, color: Colors.white)),
+            )
+                : ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: _end,
+              child: const Text('計測終了', style: TextStyle(fontSize: 22, color: Colors.white)),
+            ),
+          ),
+          const Spacer(),
+        ],
+      ),
+    );
+  }
+
+  String _format(Duration d) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    return "${twoDigits(d.inHours)}:${twoDigits(d.inMinutes % 60)}:${twoDigits(d.inSeconds % 60)}";
+  }
+}
+
+//1-2.機能：作業選択
+class TaskSelectPage extends StatefulWidget {
+  final DateTime startTime;
+  final DateTime endTime;
+  const TaskSelectPage({super.key, required this.startTime, required this.endTime});
+
+  @override
+  State<TaskSelectPage> createState() => _TaskSelectPageState();
+}
+
+class _TaskSelectPageState extends State<TaskSelectPage> {
+  List<Map<String, dynamic>> _tasks = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTasks();
+  }
+
+  Future<void> _loadTasks() async {
+    final loaded = await loadTaskSettings(); // 既存のcsv読込関数を利用
+    setState(() {
+      _tasks = loaded;
+      _loading = false;
+    });
+  }
+
+  //1-2.画面：作業選択
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(backgroundColor: Colors.blue, title: const Text('Time study tool')),
+      body: ListView.separated(
+        padding: const EdgeInsets.all(12),
+        itemCount: _tasks.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (context, idx) {
+          final task = _tasks[idx];
+          final taskName = task['name'] ?? '';
+          return SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade300),
+              onPressed: () async {
+                bool? ok = await showOkCancelModal(
+                  context,
+                  message: '$taskName\n作業内容を記録します。よろしいですか。',
+                  okLabel: "OK",
+                  cancelLabel: "キャンセル",
+                );
+                if (ok == true) {
+                  final taskId = task['id'] ?? task['task_id'];
+                  final start = widget.startTime.toIso8601String();
+                  final stop  = widget.endTime.toIso8601String();
+                  await insertTimeStudy(taskId, start, stop, 0); // helpno=0
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text('登録完了しました。'),
+                      duration: const Duration(milliseconds: 1500),
+                      behavior: SnackBarBehavior.floating,
+                      margin: const EdgeInsets.only(top: 20, left: 16, right: 16),
+                    ),
+                  );
+                  await Future.delayed(const Duration(milliseconds: 1500));
+                  if (!context.mounted) return;
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const TimerPage()),
+                        (route) => false,
+                  );
+                }
+              },
+              child: Text(taskName, style: const TextStyle(fontSize: 16, color: Colors.black)),
+            ),
+          );
+        },
       ),
     );
   }
 }
 
-//画面：計測データ出力
+//2-1.画面：計測データ出力
 class DataExportPage extends StatelessWidget {
   const DataExportPage({super.key});
   @override
@@ -205,7 +376,7 @@ class DataExportPage extends StatelessWidget {
   }
 }
 
-//▼機能：メール送信
+//2-1.機能：メール送信
 Future<void> sendLatestCsvByMail(BuildContext context) async {
   try {
     final directory = await getApplicationDocumentsDirectory();
@@ -232,7 +403,7 @@ Future<void> sendLatestCsvByMail(BuildContext context) async {
   }
 }
 
-//画面：作業時間表示
+//3-1.機能：作業時間表示
 class TimeDisplayPage extends StatelessWidget {
   const TimeDisplayPage({super.key});
 
@@ -273,7 +444,7 @@ class TimeDisplayPage extends StatelessWidget {
     );
   }
 
-  // ▼機能：DBを読み込んでデータを抽出
+  // 3-2.機能：DBを読み込んでデータを抽出
   Future<List<_TaskBarData>> _loadCsvData() async {
     final directory = await getApplicationDocumentsDirectory();
     final path = '${directory.path}/time_study_data.csv';
@@ -322,6 +493,7 @@ class BarChartSample extends StatelessWidget {
   final List<_TaskBarData> data;
   const BarChartSample({super.key, required this.data});
 
+  // 3-1.画面：作業時間表示
   @override
   Widget build(BuildContext context) {
     if (data.isEmpty) {
@@ -394,8 +566,27 @@ class BarChartSample extends StatelessWidget {
   }
 }
 
+//4-1.：設定 ※不要
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(backgroundColor: Colors.blue, title: const Text('Time study tool')),
+      body: Center(
+        child: ElevatedButton(
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const TaskSettingListPage()));
+          },
+          child: const Text('作業設定一覧へ', style: TextStyle(fontSize: 20)),
+        ),
+      ),
+    );
+  }
+}
 
-// 画面：作業設定一覧
+
+// 4-1.機能：作業設定一覧 ※無料版のみ
 class TaskSettingListPage extends StatefulWidget {
   const TaskSettingListPage({super.key});
 
@@ -405,7 +596,6 @@ class TaskSettingListPage extends StatefulWidget {
 
 class _TaskSettingListPageState extends State<TaskSettingListPage> {
   List<Map<String, dynamic>> _tasks = [];
-
   @override
   void initState() {
     super.initState();
@@ -421,6 +611,7 @@ class _TaskSettingListPageState extends State<TaskSettingListPage> {
     await saveTaskSettings(_tasks);
   }
 
+  // 4-1.画面：作業設定一覧 ※無料版のみ
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -459,7 +650,7 @@ class _TaskSettingListPageState extends State<TaskSettingListPage> {
   }
 }
 
-//画面：作業ボタン編集
+//4-2.機能：作業設定編集 ※無料版のみ
 class TaskEditPage extends StatefulWidget {
   final Map<String, dynamic> task;
   const TaskEditPage({super.key, required this.task});
@@ -490,6 +681,7 @@ class _TaskEditPageState extends State<TaskEditPage> {
     super.dispose();
   }
 
+  //4-2.画面：作業設定編集 ※無料版のみ
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -565,54 +757,6 @@ class _TaskEditPageState extends State<TaskEditPage> {
 }
 
 
-Future<List<Map<String, dynamic>>> loadTaskSettings() async {
-final directory = await getApplicationDocumentsDirectory();
-final path = '${directory.path}/task_settings.csv';
-final file = File(path);
-
-// ファイルなければ初期データで作成
-if (!file.existsSync()) {
-final initialTasks = [
-['task_id', 'task_name', 'task_type', 'task_category'],
-[1, '申し送り', 0, 0],
-[2, '掃除・環境整備', 1, 1],
-// ...必要な初期データ
-];
-final csv = const ListToCsvConverter().convert(initialTasks);
-await file.writeAsString(csv, encoding: utf8);
-}
-
-final csvStr = await file.readAsString(encoding: utf8);
-final rows = const CsvToListConverter().convert(csvStr);
-final tasks = <Map<String, dynamic>>[];
-
-for (int i = 1; i < rows.length; i++) {
-final row = rows[i];
-if (row.length < 4) continue;
-tasks.add({
-'id': row[0],
-'name': row[1],
-'type': row[2],
-'category': row[3],
-});
-}
-return tasks;
-}
-
-Future<void> saveTaskSettings(List<Map<String, dynamic>> tasks) async {
-final directory = await getApplicationDocumentsDirectory();
-final path = '${directory.path}/task_settings.csv';
-final file = File(path);
-
-List<List<dynamic>> rows = [
-['task_id', 'task_name', 'task_type', 'task_category'],
-...tasks.map((t) => [t['id'], t['name'], t['type'], t['category']]),
-];
-
-final csv = const ListToCsvConverter().convert(rows);
-await file.writeAsString(csv, encoding: utf8);
-}
-
 //機能：sqlite登録
 Future<int> insertTimeStudy(int taskId, String start, String stop, int helpno) async {
   final db = await DBHelper.open();
@@ -623,195 +767,6 @@ Future<int> insertTimeStudy(int taskId, String start, String stop, int helpno) a
     'helpno': helpno,
   });
 }
-
-// ▼機能：計測開始・終了
-class TimerPage extends StatefulWidget {
-  const TimerPage({super.key});
-  @override
-  State<TimerPage> createState() => _TimerPageState();
-}
-class _TimerPageState extends State<TimerPage> {
-  DateTime? _startTime;
-  Duration _elapsed = Duration.zero;
-  bool _isMeasuring = false;
-  Timer? _timer;
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  void _start() {
-    setState(() {
-      _startTime = DateTime.now();
-      _isMeasuring = true;
-      _elapsed = Duration.zero;
-    });
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() {
-        _elapsed = DateTime.now().difference(_startTime!);
-      });
-    });
-  }
-
-  void _end() async {
-    _timer?.cancel();
-    //終了確認モーダル
-    bool? ok = await showOkCancelModal(
-        context,
-        message: "計測を終了します。よろしいですか。",
-        okLabel: "OK",
-        cancelLabel: "キャンセル"
-    );
-    if (ok == true) {
-      if (_startTime != null) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => TaskSelectPage(startTime: _startTime!, endTime: DateTime.now()),
-          ),
-        );
-      }
-    } else {
-      // キャンセルなら計測再開
-      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        setState(() {
-          _elapsed = DateTime.now().difference(_startTime!);
-        });
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.blue, title: const Text('Time study tool')),
-      body: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            color: Colors.grey.shade300,
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              '[経過時間：${_format(_elapsed)}]',
-              style: const TextStyle(fontSize: 24),
-            ),
-          ),
-          const Spacer(),
-          Center(
-            child: !_isMeasuring
-                ? ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-              onPressed: _start,
-              child: const Text('計測開始', style: TextStyle(fontSize: 22, color: Colors.white)),
-            )
-                : ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: _end,
-              child: const Text('計測終了', style: TextStyle(fontSize: 22, color: Colors.white)),
-            ),
-          ),
-          const Spacer(),
-        ],
-      ),
-    );
-  }
-
-  String _format(Duration d) {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    return "${twoDigits(d.inHours)}:${twoDigits(d.inMinutes % 60)}:${twoDigits(d.inSeconds % 60)}";
-  }
-}
-
-//▼機能：作業選択
-class TaskSelectPage extends StatefulWidget {
-  final DateTime startTime;
-  final DateTime endTime;
-  const TaskSelectPage({super.key, required this.startTime, required this.endTime});
-
-  @override
-  State<TaskSelectPage> createState() => _TaskSelectPageState();
-}
-
-class _TaskSelectPageState extends State<TaskSelectPage> {
-  List<Map<String, dynamic>> _tasks = [];
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadTasks();
-  }
-
-  Future<void> _loadTasks() async {
-    final loaded = await loadTaskSettings(); // 既存のcsv読込関数を利用
-    setState(() {
-      _tasks = loaded;
-      _loading = false;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.blue, title: const Text('Time study tool')),
-      body: ListView.separated(
-        padding: const EdgeInsets.all(12),
-        itemCount: _tasks.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
-        itemBuilder: (context, idx) {
-          final task = _tasks[idx];
-          final taskName = task['name'] ?? '';
-          return SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade300),
-              onPressed: () async {
-                bool? ok = await showOkCancelModal(
-                  context,
-                  message: '$taskName\n作業内容を記録します。よろしいですか。',
-                  okLabel: "OK",
-                  cancelLabel: "キャンセル",
-                );
-                if (ok == true) {
-                  final taskId = task['id'] ?? task['task_id'];
-                  final start = widget.startTime.toIso8601String();
-                  final stop  = widget.endTime.toIso8601String();
-                  await insertTimeStudy(taskId, start, stop, 0); // helpno=0
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('登録完了しました。'),
-                      duration: const Duration(milliseconds: 1500),
-                      behavior: SnackBarBehavior.floating,
-                      margin: const EdgeInsets.only(top: 20, left: 16, right: 16),
-                    ),
-                  );
-                  await Future.delayed(const Duration(milliseconds: 1500));
-                  if (!context.mounted) return;
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (_) => const TimerPage()),
-                        (route) => false,
-                  );
-                }
-              },
-              child: Text(taskName, style: const TextStyle(fontSize: 16, color: Colors.black)),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
 
 // OK/Cancelモーダル共通化
 Future<bool?> showOkCancelModal(BuildContext context,
@@ -836,7 +791,7 @@ Future<bool?> showOkCancelModal(BuildContext context,
   );
 }
 
-///機能：CSV変換
+//機能：CSV登録　※不要
 Future<void> saveTaskToCsv(String taskName, DateTime start, DateTime stop) async {
   // 1. 業務リストをcsvから取得
   final taskList = await loadTaskSettings(); // これでList<Map<String, dynamic>>取得
@@ -871,3 +826,52 @@ Future<void> saveTaskToCsv(String taskName, DateTime start, DateTime stop) async
   await file.writeAsBytes(bytes);
 }
 
+//機能：CSV登録　※不要
+Future<List<Map<String, dynamic>>> loadTaskSettings() async {
+  final directory = await getApplicationDocumentsDirectory();
+  final path = '${directory.path}/task_settings.csv';
+  final file = File(path);
+
+// ファイルなければ初期データで作成
+  if (!file.existsSync()) {
+    final initialTasks = [
+      ['task_id', 'task_name', 'task_type', 'task_category'],
+      [1, '申し送り', 0, 0],
+      [2, '掃除・環境整備', 1, 1],
+// ...必要な初期データ
+    ];
+    final csv = const ListToCsvConverter().convert(initialTasks);
+    await file.writeAsString(csv, encoding: utf8);
+  }
+
+  final csvStr = await file.readAsString(encoding: utf8);
+  final rows = const CsvToListConverter().convert(csvStr);
+  final tasks = <Map<String, dynamic>>[];
+
+  for (int i = 1; i < rows.length; i++) {
+    final row = rows[i];
+    if (row.length < 4) continue;
+    tasks.add({
+      'id': row[0],
+      'name': row[1],
+      'type': row[2],
+      'category': row[3],
+    });
+  }
+  return tasks;
+}
+
+//機能：CSV登録　※不要
+Future<void> saveTaskSettings(List<Map<String, dynamic>> tasks) async {
+  final directory = await getApplicationDocumentsDirectory();
+  final path = '${directory.path}/task_settings.csv';
+  final file = File(path);
+
+  List<List<dynamic>> rows = [
+    ['task_id', 'task_name', 'task_type', 'task_category'],
+    ...tasks.map((t) => [t['id'], t['name'], t['type'], t['category']]),
+  ];
+
+  final csv = const ListToCsvConverter().convert(rows);
+  await file.writeAsString(csv, encoding: utf8);
+}
