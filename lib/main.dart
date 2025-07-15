@@ -249,12 +249,13 @@ class _TaskSelectPageState extends State<TaskSelectPage> {
   }
 
   Future<void> _loadTasks() async {
-    final loaded = await loadTaskSettings(); // 既存のcsv読込関数を利用
+    final loaded = await fetchTaskSettings(); // ←SQLiteのデータ取得関数に修正！
     setState(() {
       _tasks = loaded;
       _loading = false;
     });
   }
+
 
   //1-2.画面：作業選択
   @override
@@ -596,6 +597,7 @@ class TaskSettingListPage extends StatefulWidget {
 
 class _TaskSettingListPageState extends State<TaskSettingListPage> {
   List<Map<String, dynamic>> _tasks = [];
+
   @override
   void initState() {
     super.initState();
@@ -603,15 +605,18 @@ class _TaskSettingListPageState extends State<TaskSettingListPage> {
   }
 
   Future<void> _load() async {
-    final loaded = await loadTaskSettings();
+    final loaded = await fetchTaskSettings();
     setState(() => _tasks = loaded);
   }
 
-  Future<void> _save() async {
-    await saveTaskSettings(_tasks);
+  // 保存は個別にやる
+  Future<void> _save(int idx, Map<String, dynamic> updated) async {
+    await updateTaskSetting(updated); // DBを更新
+    setState(() {
+      _tasks[idx] = updated;
+    });
   }
 
-  // 4-1.画面：作業設定一覧 ※無料版のみ
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -632,13 +637,7 @@ class _TaskSettingListPageState extends State<TaskSettingListPage> {
                   ),
                 );
                 if (updated != null) {
-                  setState(() {
-                    // "id"列が必須なので保持・上書き
-                    _tasks[idx]['name'] = updated['name'];
-                    _tasks[idx]['type'] = updated['type'];
-                    _tasks[idx]['category'] = updated['category'];
-                  });
-                  await _save();
+                  await _save(idx, updated); // SQLiteにも保存
                 }
               },
               child: Text(task['name'], style: const TextStyle(fontSize: 16, color: Colors.black)),
@@ -649,6 +648,7 @@ class _TaskSettingListPageState extends State<TaskSettingListPage> {
     );
   }
 }
+
 
 //4-2.機能：作業設定編集 ※無料版のみ
 class TaskEditPage extends StatefulWidget {
@@ -791,87 +791,55 @@ Future<bool?> showOkCancelModal(BuildContext context,
   );
 }
 
-//機能：CSV登録　※不要
-Future<void> saveTaskToCsv(String taskName, DateTime start, DateTime stop) async {
-  // 1. 業務リストをcsvから取得
-  final taskList = await loadTaskSettings(); // これでList<Map<String, dynamic>>取得
-
-  // 2. taskIdを探す
-  int taskId = 0;
-  for (final t in taskList) {
-    if (t['name'] == taskName) {
-      taskId = t['id'] ?? 0;
-      break;
-    }
-  }
-
-  final directory = await getApplicationDocumentsDirectory();
-  final path = '${directory.path}/time_study_data.csv';
-  final file = File(path);
-
-  final newRow = [taskId, taskName, DateFormat('HH:mm:ss').format(start), DateFormat('HH:mm:ss').format(stop)];
-  List<List<dynamic>> rows = [];
-  if (file.existsSync()) {
-    String content = await file.readAsString(encoding: utf8);
-    List<List<dynamic>> existingRows = const CsvToListConverter().convert(content, eol: '\n');
-    rows.addAll(existingRows);
-  } else {
-    rows.add(['task_id', 'task_name', 'start', 'stop']);
-  }
-  rows.add(newRow);
-
-  String csv = const ListToCsvConverter().convert(rows);
-  List<int> bytes = [0xEF, 0xBB, 0xBF];
-  bytes.addAll(utf8.encode(csv));
-  await file.writeAsBytes(bytes);
-}
-
-//機能：CSV登録　※不要
-Future<List<Map<String, dynamic>>> loadTaskSettings() async {
-  final directory = await getApplicationDocumentsDirectory();
-  final path = '${directory.path}/task_settings.csv';
-  final file = File(path);
-
-// ファイルなければ初期データで作成
-  if (!file.existsSync()) {
-    final initialTasks = [
-      ['task_id', 'task_name', 'task_type', 'task_category'],
-      [1, '申し送り', 0, 0],
-      [2, '掃除・環境整備', 1, 1],
-// ...必要な初期データ
-    ];
-    final csv = const ListToCsvConverter().convert(initialTasks);
-    await file.writeAsString(csv, encoding: utf8);
-  }
-
-  final csvStr = await file.readAsString(encoding: utf8);
-  final rows = const CsvToListConverter().convert(csvStr);
-  final tasks = <Map<String, dynamic>>[];
-
-  for (int i = 1; i < rows.length; i++) {
-    final row = rows[i];
-    if (row.length < 4) continue;
-    tasks.add({
-      'id': row[0],
-      'name': row[1],
-      'type': row[2],
-      'category': row[3],
+//機能：sqlite データ取得(一覧表示)
+Future<List<Map<String, dynamic>>> fetchTaskSettings() async {
+  final db = await DBHelper.open();
+  final result = await db.query('task_table', orderBy: 'task_id ASC');
+  // データが無ければ初期投入
+  if (result.isEmpty) {
+    await db.insert('task_table', {
+      'task_name': '申し送り',
+      'task_type_no': 0,
+      'task_category_no': 0,
     });
+    // もう一度取得
+    return await fetchTaskSettings();
   }
-  return tasks;
+  return result.map((row) => {
+    'id': row['task_id'],
+    'name': row['task_name'],
+    'type': row['task_type_no'],
+    'category': row['task_category_no'],
+  }).toList();
 }
 
-//機能：CSV登録　※不要
-Future<void> saveTaskSettings(List<Map<String, dynamic>> tasks) async {
-  final directory = await getApplicationDocumentsDirectory();
-  final path = '${directory.path}/task_settings.csv';
-  final file = File(path);
-
-  List<List<dynamic>> rows = [
-    ['task_id', 'task_name', 'task_type', 'task_category'],
-    ...tasks.map((t) => [t['id'], t['name'], t['type'], t['category']]),
-  ];
-
-  final csv = const ListToCsvConverter().convert(rows);
-  await file.writeAsString(csv, encoding: utf8);
+//機能：sqlite データ保存（更新）
+Future<void> updateTask(Map<String, dynamic> task) async {
+  final db = await DBHelper.open();
+  await db.update(
+    'task_table',
+    {
+      'task_name': task['name'],
+      'task_type_no': task['type'],
+      'task_category_no': task['category'],
+    },
+    where: 'task_id = ?',
+    whereArgs: [task['id']],
+  );
 }
+//機能：sqlite タスク保存（更新）
+Future<void> updateTaskSetting(Map<String, dynamic> task) async {
+  final db = await DBHelper.open();
+  await db.update(
+    'task_table',
+    {
+      'task_name': task['name'],
+      'task_type_no': task['type'],
+      'task_category_no': task['category'],
+    },
+    where: 'task_id = ?',
+    whereArgs: [task['id']],
+  );
+}
+
+
