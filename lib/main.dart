@@ -190,7 +190,20 @@ class _TimerPageState extends State<TimerPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.blue, title: const Text('Time study tool')),
+      appBar: AppBar(
+        backgroundColor: Colors.blue,
+        title: const Text('Time study tool'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const MenuPage()),
+                  (route) => false,
+            );
+          },
+        ),
+      ),
       body: Column(
         children: [
           Container(
