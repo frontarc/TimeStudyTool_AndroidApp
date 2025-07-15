@@ -287,7 +287,7 @@ class _TaskSelectPageState extends State<TaskSelectPage> {
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, idx) {
           final task = _tasks[idx];
-          final taskName = task['name'] ?? '';
+          final taskName = task['task_name'] ?? '';
           return SizedBox(
             width: double.infinity,
             child: ElevatedButton(
@@ -580,7 +580,7 @@ class BarChartSample extends StatelessWidget {
   }
 }
 
-//4-1.：設定 ※不要
+//4-1.：設定
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
   @override
@@ -592,7 +592,7 @@ class SettingsPage extends StatelessWidget {
           onPressed: () {
             Navigator.push(context, MaterialPageRoute(builder: (_) => const TaskSettingListPage()));
           },
-          child: const Text('作業設定一覧へ', style: TextStyle(fontSize: 20)),
+          child: const Text('作業設定一覧', style: TextStyle(fontSize: 20)),
         ),
       ),
     );
@@ -653,7 +653,7 @@ class _TaskSettingListPageState extends State<TaskSettingListPage> {
                   await _save(idx, updated); // SQLiteにも保存
                 }
               },
-              child: Text(task['name'], style: const TextStyle(fontSize: 16, color: Colors.black)),
+              child: Text(task['task_name'] ?? '',style: const TextStyle(fontSize: 16, color: Colors.black)),
             ),
           );
         },
@@ -674,18 +674,18 @@ class TaskEditPage extends StatefulWidget {
 
 class _TaskEditPageState extends State<TaskEditPage> {
   late TextEditingController _nameController;
-  late int _selectedType;
-  late int _selectedCategory;
+  late int _selectedCategoryNo;
+  late int _selectedTypeNo;
 
-  final _typeOptions = const ['直接介護', '間接介護', 'その他'];
-  final _categoryOptions = const ['肉体的負担', '精神的負担', 'その他'];
+  final _categoryOptions = const ['1.通常作業', '2.肉体的負担', '3.精神的負担', '4.その他'];
+  final _typeOptions = const ['1.直接介護', '2.間接介護', '3.その他'];
 
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.task['name'] ?? widget.task['task_name'] ?? '');
-    _selectedType = (widget.task['type'] ?? widget.task['task_type'] ?? 0) as int;
-    _selectedCategory = (widget.task['category'] ?? widget.task['task_category'] ?? 0) as int;
+    _nameController = TextEditingController(text: widget.task['task_name'] ?? '');
+    _selectedCategoryNo = (widget.task['task_category_no'] ?? 1) as int;
+    _selectedTypeNo = (widget.task['task_type_no'] ?? 1) as int;
   }
 
   @override
@@ -694,7 +694,20 @@ class _TaskEditPageState extends State<TaskEditPage> {
     super.dispose();
   }
 
-  //4-2.画面：作業設定編集 ※無料版のみ
+  // 確定ボタン押下時の処理
+  Future<void> _onSave() async {
+    final updatedTask = {
+      'id': widget.task['id'],
+      'task_name': _nameController.text,
+      'task_category_no': _selectedCategoryNo,
+      'task_type_no': _selectedTypeNo,
+    };
+    // 必要なら下記で新規追加・更新を判定
+    await updateTaskSetting(updatedTask); // SQLiteに登録
+    if (!mounted) return;
+    Navigator.pop(context, updatedTask);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -713,12 +726,12 @@ class _TaskEditPageState extends State<TaskEditPage> {
                 const Text('カテゴリ:'),
                 const SizedBox(width: 16),
                 DropdownButton<int>(
-                  value: _selectedType,
+                  value: _selectedCategoryNo,
                   items: List.generate(
-                    _typeOptions.length,
-                        (i) => DropdownMenuItem(value: i, child: Text(_typeOptions[i])),
+                    _categoryOptions.length,
+                        (i) => DropdownMenuItem(value: i + 1, child: Text(_categoryOptions[i])),
                   ),
-                  onChanged: (v) => setState(() => _selectedType = v ?? 0),
+                  onChanged: (v) => setState(() => _selectedCategoryNo = v ?? 1),
                 ),
               ],
             ),
@@ -728,12 +741,12 @@ class _TaskEditPageState extends State<TaskEditPage> {
                 const Text('介護種別:'),
                 const SizedBox(width: 16),
                 DropdownButton<int>(
-                  value: _selectedCategory,
+                  value: _selectedTypeNo,
                   items: List.generate(
-                    _categoryOptions.length,
-                        (i) => DropdownMenuItem(value: i, child: Text(_categoryOptions[i])),
+                    _typeOptions.length,
+                        (i) => DropdownMenuItem(value: i + 1, child: Text(_typeOptions[i])),
                   ),
-                  onChanged: (v) => setState(() => _selectedCategory = v ?? 0),
+                  onChanged: (v) => setState(() => _selectedTypeNo = v ?? 1),
                 ),
               ],
             ),
@@ -743,14 +756,7 @@ class _TaskEditPageState extends State<TaskEditPage> {
               children: [
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-                  onPressed: () {
-                    Navigator.pop(context, {
-                      'id': widget.task['id'],
-                      'name': _nameController.text,
-                      'type': _selectedType,
-                      'category': _selectedCategory,
-                    });
-                  },
+                  onPressed: _onSave,
                   child: const Text('確定', style: TextStyle(color: Colors.white)),
                 ),
                 ElevatedButton(
@@ -768,6 +774,7 @@ class _TaskEditPageState extends State<TaskEditPage> {
     );
   }
 }
+
 
 
 //機能：sqlite登録
@@ -820,9 +827,9 @@ Future<List<Map<String, dynamic>>> fetchTaskSettings() async {
   }
   return result.map((row) => {
     'id': row['task_id'],
-    'name': row['task_name'],
-    'type': row['task_type_no'],
-    'category': row['task_category_no'],
+    'task_name': row['task_name'],
+    'task_type_no': row['task_type_no'],
+    'task_category_no': row['task_category_no'],
   }).toList();
 }
 
@@ -832,9 +839,9 @@ Future<void> updateTask(Map<String, dynamic> task) async {
   await db.update(
     'task_table',
     {
-      'task_name': task['name'],
-      'task_type_no': task['type'],
-      'task_category_no': task['category'],
+      'task_name': task['task_name'],
+      'task_type_no': task['task_type_no'],
+      'task_category_no': task['task_category_no'],
     },
     where: 'task_id = ?',
     whereArgs: [task['id']],
@@ -846,9 +853,9 @@ Future<void> updateTaskSetting(Map<String, dynamic> task) async {
   await db.update(
     'task_table',
     {
-      'task_name': task['name'],
-      'task_type_no': task['type'],
-      'task_category_no': task['category'],
+      'task_name': task['task_name'],
+      'task_type_no': task['task_type_no'],
+      'task_category_no': task['task_category_no'],
     },
     where: 'task_id = ?',
     whereArgs: [task['id']],
