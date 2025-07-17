@@ -461,7 +461,9 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
     final directory = await getApplicationDocumentsDirectory();
     final path = '${directory.path}/time_study.csv';
     final file = File(path);
-    await file.writeAsString(csvStr);
+    final bom = Utf8Encoder().convert('\uFEFF');           // BOM生成
+    final encoded = [...bom, ...utf8.encode(csvStr)];      // BOM + CSV文字列
+    await file.writeAsBytes(encoded); // ← writeAsStringではなく writeAsBytes で保存
 
     // ④ 宛先アドレスのみローカル（端末）から取得
     final prefs = await SharedPreferences.getInstance();
