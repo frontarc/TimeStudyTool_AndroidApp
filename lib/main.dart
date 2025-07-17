@@ -9,6 +9,11 @@ import 'package:share_plus/share_plus.dart';  // 追加
 import 'package:fl_chart/fl_chart.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:mailer/mailer.dart';
+import 'package:mailer/smtp_server.dart';
+
 
 //sqlite構成
 class DBHelper {
@@ -372,7 +377,7 @@ class DataExportPage extends StatelessWidget {
               height: 60,
               child: ElevatedButton(
                 onPressed: () async {
-                  await sendLatestCsvByMail(context);
+                  await sendLatestCsvBySmtp(context);
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.orange,
@@ -390,24 +395,165 @@ class DataExportPage extends StatelessWidget {
   }
 }
 
-//2-1.機能：メール送信
-Future<void> sendLatestCsvByMail(BuildContext context) async {
+//2-1.機能:csvファイル作成＆メール送信
+Future<void> sendLatestCsvBySmtp(BuildContext context) async {
   try {
-    final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/time_study_data.csv';
-    final file = File(path);
+    final db = await DBHelper.open();
 
-    if (!file.existsSync()) {
+    // ① JOINで最新1件取得
+    final result = await db.rawQuery('''
+      SELECT ts.timestudy_id, ts.task_id, tt.task_name, tt.task_type_no, tt.task_category_no, 
+             ts.start, ts.stop, ts.helpno
+      FROM time_study ts
+      LEFT JOIN task_table tt ON ts.task_id = tt.task_id
+      ORDER BY ts.timestudy_id DESC
+      LIMIT 1
+    ''');
+
+    if (result.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("CSVデータがありません")),
+        const SnackBar(content: Text("データがありません")),
+      );
+      return;
+    }
+    final row = result.first;
+
+    // ② CSV生成
+    final headers = [
+      'timestudy_id',
+      'task_id',
+      'task_name',
+      'task_type_no',
+      'task_category_no',
+      'start',
+      'stop',
+      'helpno'
+    ];
+    final values = [
+      row['timestudy_id'],
+      row['task_id'],
+      row['task_name'],
+      row['task_type_no'],
+      row['task_category_no'],
+      row['start'],
+      row['stop'],
+      row['helpno']
+    ];
+    final csvStr = const ListToCsvConverter().convert([headers, values]);
+
+    // ③ 一時ファイルに保存
+    final directory = await getApplicationDocumentsDirectory();
+    final path = '${directory.path}/latest_time_study.csv';
+    final file = File(path);
+    await file.writeAsString(csvStr);
+
+    // ④ メールアドレス・パスワードを取得
+    final prefs = await SharedPreferences.getInstance();
+    final toMail = prefs.getString('mail_to') ?? '';
+    final fromMail = prefs.getString('mail_from') ?? '';
+    final password = prefs.getString('mail_password') ?? '';
+
+    if (toMail.isEmpty || fromMail.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("メール設定が不足しています")),
       );
       return;
     }
 
-    // メール共有(ファイル添付)
+    // ⑤ SMTPサーバ設定（例：Gmail。独自ドメイン/会社メールならSmtpServer('smtp.***')）
+    final smtpServer = gmail(fromMail, password);
+
+    // ⑥ メール作成
+    final message = Message()
+      ..from = Address(fromMail)
+      ..recipients.add(toMail)
+      ..subject = 'TimeStudyTool 計測データ'
+      ..text = 'TimeStudyToolの計測データを添付します。'
+      ..attachments = [
+        FileAttachment(file)
+      ];
+
+    // ⑦ メール送信
+    try {
+      final sendReport = await send(message, smtpServer);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("メール送信成功: ${sendReport.toString()}")),
+      );
+    } on MailerException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("メール送信失敗: ${e.toString()}")),
+      );
+    }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("エラー: $e")),
+    );
+  }
+}
+
+/*
+//2-1.機能：メール送信
+// 直近1件の計測＋作業情報をCSVで送信
+Future<void> sendLatestCsvByMail(BuildContext context) async {
+  try {
+    final db = await DBHelper.open();
+
+    // --- ① JOINで最新1件取得
+    final result = await db.rawQuery('''
+      SELECT ts.timestudy_id, ts.task_id, tt.task_name, tt.task_type_no, tt.task_category_no, 
+             ts.start, ts.stop, ts.helpno
+      FROM time_study ts
+      LEFT JOIN task_table tt ON ts.task_id = tt.task_id
+      ORDER BY ts.timestudy_id DESC
+      LIMIT 1
+    ''');
+
+    if (result.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("データがありません")),
+      );
+      return;
+    }
+    final row = result.first;
+
+    // --- ② CSV生成
+    final headers = [
+      'timestudy_id',
+      'task_id',
+      'task_name',
+      'task_type_no',
+      'task_category_no',
+      'start',
+      'stop',
+      'helpno'
+    ];
+    final values = [
+      row['timestudy_id'],
+      row['task_id'],
+      row['task_name'],
+      row['task_type_no'],
+      row['task_category_no'],
+      row['start'],
+      row['stop'],
+      row['helpno']
+    ];
+    final csvStr = const ListToCsvConverter().convert([headers, values]);
+
+    // --- ③ 一時ファイルに保存
+    final directory = await getApplicationDocumentsDirectory();
+    final path = '${directory.path}/latest_time_study.csv';
+    final file = File(path);
+    await file.writeAsString(csvStr);
+
+    // --- ④ メールアドレス設定を読み出し
+    final prefs = await SharedPreferences.getInstance();
+    final toMail = prefs.getString('toMail') ?? '';
+    final fromMail = prefs.getString('fromMail') ?? '';
+
+    // --- ⑤ ファイル添付メール送信
     await Share.shareXFiles(
       [XFile(path)],
-      text: 'TimeStudyToolの計測データを添付します。',
+      text: 'TimeStudyToolの計測データ（宛先:$toMail 差出人:$fromMail）',
       subject: 'TimeStudyTool 計測データ',
     );
   } catch (e) {
@@ -416,6 +562,7 @@ Future<void> sendLatestCsvByMail(BuildContext context) async {
     );
   }
 }
+*/
 
 //3-1.機能：作業時間表示
 class TimeDisplayPage extends StatelessWidget {
@@ -580,7 +727,7 @@ class BarChartSample extends StatelessWidget {
   }
 }
 
-//4-1.：設定
+//4-1.画面：設定
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
   @override
@@ -588,16 +735,29 @@ class SettingsPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(backgroundColor: Colors.blue, title: const Text('Time study tool')),
       body: Center(
-        child: ElevatedButton(
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const TaskSettingListPage()));
-          },
-          child: const Text('作業設定一覧', style: TextStyle(fontSize: 20)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min, // ボタンを中央寄せ
+          children: [
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const TaskSettingListPage()));
+              },
+              child: const Text('作業設定一覧', style: TextStyle(fontSize: 20)),
+            ),
+            const SizedBox(height: 20), // ボタンの間に隙間
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const MailSettingsPage()));
+              },
+              child: const Text('メール設定', style: TextStyle(fontSize: 20)),
+            ),
+          ],
         ),
       ),
     );
   }
 }
+
 
 
 // 4-1.機能：作業設定一覧 ※無料版のみ
@@ -775,6 +935,102 @@ class _TaskEditPageState extends State<TaskEditPage> {
   }
 }
 
+//4-3.機能：メール設定
+class MailSettingsPage extends StatefulWidget {
+  const MailSettingsPage({super.key});
+
+  @override
+  State<MailSettingsPage> createState() => _MailSettingsPageState();
+}
+
+class _MailSettingsPageState extends State<MailSettingsPage> {
+  final _toController = TextEditingController();
+  final _fromController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMailSettings();
+  }
+
+  Future<void> _loadMailSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    _toController.text = prefs.getString('mail_to') ?? '';
+    _fromController.text = prefs.getString('mail_from') ?? '';
+    _passwordController.text = prefs.getString('mail_password') ?? '';
+  }
+
+  Future<void> _saveMailSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('mail_to', _toController.text);
+    await prefs.setString('mail_from', _fromController.text);
+    await prefs.setString('mail_password', _passwordController.text);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("保存しました")),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.blue,
+        title: const Text('Time study tool'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            TextField(
+              controller: _toController,
+              decoration: const InputDecoration(
+                labelText: '宛先メールアドレス',
+              ),
+              keyboardType: TextInputType.emailAddress,
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _fromController,
+              decoration: const InputDecoration(
+                labelText: '差出人メールアドレス',
+              ),
+              keyboardType: TextInputType.emailAddress,
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _passwordController,
+              decoration: const InputDecoration(
+                labelText: 'メール送信元のパスワード',
+              ),
+              obscureText: true,
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+              onPressed: () async {
+                await _saveMailSettings();
+                await debugShowMailSettings(context); // ここでデバッグ用に保存値を確認
+              },
+              child: const Text('保存', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// デバッグ用：保存した値を表示する関数
+Future<void> debugShowMailSettings(BuildContext context) async {
+  final prefs = await SharedPreferences.getInstance();
+  final toMail = prefs.getString('mail_to') ?? '';
+  final fromMail = prefs.getString('mail_from') ?? '';
+  final password = prefs.getString('mail_password') ?? '';
+  print('toMail: $toMail');
+  print('fromMail: $fromMail');
+  print('mailPassword: $password');
+}
 
 
 //機能：sqlite登録
