@@ -24,14 +24,16 @@ class DBHelper {
       path,
       version: 1,
       onCreate: (db, version) async {
+        // task_table作成（type/category_noは必ずNOT NULL & DEFAULT 1）
         await db.execute('''
           CREATE TABLE IF NOT EXISTS task_table (
-            task_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_name TEXT,
-            task_type_no INTEGER,
-            task_category_no INTEGER
+           task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+           task_name TEXT,
+           task_type_no INTEGER NOT NULL DEFAULT 1,
+           task_category_no INTEGER NOT NULL DEFAULT 1
           );
         ''');
+        // time_study作成（sentカラムはデフォルト0）
         await db.execute('''
           CREATE TABLE IF NOT EXISTS time_study (
             timestudy_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,9 +41,22 @@ class DBHelper {
             start TEXT,
             stop TEXT,
             helpno INTEGER,
+            sent INTEGER DEFAULT 0,
             FOREIGN KEY(task_id) REFERENCES task_table(task_id)
           );
         ''');
+        // ここで初期データを一括登録
+        final initialTasks = [
+          '申し送り', '排泄介助', '食事介助', '入浴介助', '体位交換',
+          '清拭', '衣服着脱', '移乗介助', '服薬介助', '記録'
+        ];
+        for (final name in initialTasks) {
+          await db.insert('task_table', {
+            'task_name': name,
+            'task_type_no': 1,      // ← 必ず1
+            'task_category_no': 1,  // ← 必ず1
+          });
+        }
       },
     );
   }
@@ -399,25 +414,24 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
   try {
     final db = await DBHelper.open();
 
-    // ① JOINで最新1件取得
+    // ① 「未送信（sent=0）」のみ全件取得
     final result = await db.rawQuery('''
-      SELECT ts.timestudy_id, ts.task_id, tt.task_name, tt.task_type_no, tt.task_category_no, 
+      SELECT ts.timestudy_id, ts.task_id, tt.task_name, tt.task_type_no, tt.task_category_no,
              ts.start, ts.stop, ts.helpno
       FROM time_study ts
       LEFT JOIN task_table tt ON ts.task_id = tt.task_id
-      ORDER BY ts.timestudy_id DESC
-      LIMIT 1
+      WHERE ts.sent = 0
+      ORDER BY ts.timestudy_id ASC
     ''');
 
     if (result.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("データがありません")),
+        const SnackBar(content: Text("未送信のデータがありません")),
       );
       return;
     }
-    final row = result.first;
 
-    // ② CSV生成
+    // ② CSV生成（全件）
     final headers = [
       'timestudy_id',
       'task_id',
@@ -428,17 +442,20 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
       'stop',
       'helpno'
     ];
-    final values = [
-      row['timestudy_id'],
-      row['task_id'],
-      row['task_name'],
-      row['task_type_no'],
-      row['task_category_no'],
-      row['start'],
-      row['stop'],
-      row['helpno']
+    final csvRows = [
+      headers,
+      ...result.map((row) => [
+        row['timestudy_id'],
+        row['task_id'],
+        row['task_name'],
+        row['task_type_no'],
+        row['task_category_no'],
+        row['start'],
+        row['stop'],
+        row['helpno']
+      ])
     ];
-    final csvStr = const ListToCsvConverter().convert([headers, values]);
+    final csvStr = const ListToCsvConverter().convert(csvRows);
 
     // ③ 一時ファイルに保存
     final directory = await getApplicationDocumentsDirectory();
@@ -457,9 +474,8 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
     }
 
     // ⑤ WEB APIからfromアドレス・パスワード取得
-    final apiUrl = 'http://192.168.10.148:8081/api/get-mail-setting'; // ←ここを本番URL等に
-    // APIが認証不要・パラメータ不要の場合
-    final apiRes = await http.post(Uri.parse(apiUrl)); // POSTでもGETでも可
+    final apiUrl = 'http://192.168.10.148:8081/api/get-mail-setting';
+    final apiRes = await http.post(Uri.parse(apiUrl));
     if (apiRes.statusCode != 200) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("WEBからメール設定取得失敗: ${apiRes.body}")),
@@ -493,6 +509,14 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
     // ⑧ メール送信
     try {
       final sendReport = await send(message, smtpServer);
+
+      // ⑨ 送信済みのtimestudy_idをまとめてUPDATE
+      final ids = result.map((row) => row['timestudy_id']).toList();
+      if (ids.isNotEmpty) {
+        final idsString = ids.join(',');
+        await db.rawUpdate('UPDATE time_study SET sent = 1 WHERE timestudy_id IN ($idsString)');
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("メール送信成功: ${sendReport.toString()}")),
       );
@@ -507,79 +531,6 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
     );
   }
 }
-
-/*
-//2-1.機能：メール送信
-// 直近1件の計測＋作業情報をCSVで送信
-Future<void> sendLatestCsvByMail(BuildContext context) async {
-  try {
-    final db = await DBHelper.open();
-
-    // --- ① JOINで最新1件取得
-    final result = await db.rawQuery('''
-      SELECT ts.timestudy_id, ts.task_id, tt.task_name, tt.task_type_no, tt.task_category_no, 
-             ts.start, ts.stop, ts.helpno
-      FROM time_study ts
-      LEFT JOIN task_table tt ON ts.task_id = tt.task_id
-      ORDER BY ts.timestudy_id DESC
-      LIMIT 1
-    ''');
-
-    if (result.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("データがありません")),
-      );
-      return;
-    }
-    final row = result.first;
-
-    // --- ② CSV生成
-    final headers = [
-      'timestudy_id',
-      'task_id',
-      'task_name',
-      'task_type_no',
-      'task_category_no',
-      'start',
-      'stop',
-      'helpno'
-    ];
-    final values = [
-      row['timestudy_id'],
-      row['task_id'],
-      row['task_name'],
-      row['task_type_no'],
-      row['task_category_no'],
-      row['start'],
-      row['stop'],
-      row['helpno']
-    ];
-    final csvStr = const ListToCsvConverter().convert([headers, values]);
-
-    // --- ③ 一時ファイルに保存
-    final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/latest_time_study.csv';
-    final file = File(path);
-    await file.writeAsString(csvStr);
-
-    // --- ④ メールアドレス設定を読み出し
-    final prefs = await SharedPreferences.getInstance();
-    final toMail = prefs.getString('toMail') ?? '';
-    final fromMail = prefs.getString('fromMail') ?? '';
-
-    // --- ⑤ ファイル添付メール送信
-    await Share.shareXFiles(
-      [XFile(path)],
-      text: 'TimeStudyToolの計測データ（宛先:$toMail 差出人:$fromMail）',
-      subject: 'TimeStudyTool 計測データ',
-    );
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("エラー: $e")),
-    );
-  }
-}
-*/
 
 //3-1.機能：作業時間表示
 class TimeDisplayPage extends StatelessWidget {
@@ -1066,16 +1017,6 @@ Future<bool?> showOkCancelModal(BuildContext context,
 Future<List<Map<String, dynamic>>> fetchTaskSettings() async {
   final db = await DBHelper.open();
   final result = await db.query('task_table', orderBy: 'task_id ASC');
-  // データが無ければ初期投入
-  if (result.isEmpty) {
-    await db.insert('task_table', {
-      'task_name': '申し送り',
-      'task_type_no': 0,
-      'task_category_no': 0,
-    });
-    // もう一度取得
-    return await fetchTaskSettings();
-  }
   return result.map((row) => {
     'id': row['task_id'],
     'task_name': row['task_name'],
