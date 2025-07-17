@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mailer/mailer.dart';
 import 'package:mailer/smtp_server.dart';
+import 'package:http/http.dart' as http; // ★API通信用
 
 
 //sqlite構成
@@ -395,7 +396,7 @@ class DataExportPage extends StatelessWidget {
   }
 }
 
-//2-1.機能:csvファイル作成＆メール送信
+// 2-1. 機能: csvファイル作成＆メール送信
 Future<void> sendLatestCsvBySmtp(BuildContext context) async {
   try {
     final db = await DBHelper.open();
@@ -443,27 +444,45 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
 
     // ③ 一時ファイルに保存
     final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/latest_time_study.csv';
+    final path = '${directory.path}/time_study.csv';
     final file = File(path);
     await file.writeAsString(csvStr);
 
-    // ④ メールアドレス・パスワードを取得
+    // ④ 宛先アドレスのみローカル（端末）から取得
     final prefs = await SharedPreferences.getInstance();
     final toMail = prefs.getString('mail_to') ?? '';
-    final fromMail = prefs.getString('mail_from') ?? '';
-    final password = prefs.getString('mail_password') ?? '';
-
-    if (toMail.isEmpty || fromMail.isEmpty || password.isEmpty) {
+    if (toMail.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("メール設定が不足しています")),
+        const SnackBar(content: Text("宛先メールアドレスの設定が不足しています")),
       );
       return;
     }
 
-    // ⑤ SMTPサーバ設定（例：Gmail。独自ドメイン/会社メールならSmtpServer('smtp.***')）
+    // ⑤ WEB APIからfromアドレス・パスワード取得
+    final apiUrl = 'http://192.168.10.148:8081/api/get-mail-setting'; // ←ここを本番URL等に
+    // APIが認証不要・パラメータ不要の場合
+    final apiRes = await http.post(Uri.parse(apiUrl)); // POSTでもGETでも可
+    if (apiRes.statusCode != 200) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("WEBからメール設定取得失敗: ${apiRes.body}")),
+      );
+      return;
+    }
+    final apiData = json.decode(apiRes.body);
+    final fromMail = apiData['from_mail'] ?? '';
+    final password = apiData['smtp_password'] ?? '';
+
+    if (fromMail.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("送信元メール情報取得エラー")),
+      );
+      return;
+    }
+
+    // ⑥ SMTPサーバ設定
     final smtpServer = gmail(fromMail, password);
 
-    // ⑥ メール作成
+    // ⑦ メール作成
     final message = Message()
       ..from = Address(fromMail)
       ..recipients.add(toMail)
@@ -473,7 +492,7 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
         FileAttachment(file)
       ];
 
-    // ⑦ メール送信
+    // ⑧ メール送信
     try {
       final sendReport = await send(message, smtpServer);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -945,8 +964,6 @@ class MailSettingsPage extends StatefulWidget {
 
 class _MailSettingsPageState extends State<MailSettingsPage> {
   final _toController = TextEditingController();
-  final _fromController = TextEditingController();
-  final _passwordController = TextEditingController();
 
   @override
   void initState() {
@@ -957,15 +974,11 @@ class _MailSettingsPageState extends State<MailSettingsPage> {
   Future<void> _loadMailSettings() async {
     final prefs = await SharedPreferences.getInstance();
     _toController.text = prefs.getString('mail_to') ?? '';
-    _fromController.text = prefs.getString('mail_from') ?? '';
-    _passwordController.text = prefs.getString('mail_password') ?? '';
   }
 
   Future<void> _saveMailSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('mail_to', _toController.text);
-    await prefs.setString('mail_from', _fromController.text);
-    await prefs.setString('mail_password', _passwordController.text);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("保存しました")),
     );
@@ -989,28 +1002,11 @@ class _MailSettingsPageState extends State<MailSettingsPage> {
               ),
               keyboardType: TextInputType.emailAddress,
             ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: _fromController,
-              decoration: const InputDecoration(
-                labelText: '差出人メールアドレス',
-              ),
-              keyboardType: TextInputType.emailAddress,
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: _passwordController,
-              decoration: const InputDecoration(
-                labelText: 'メール送信元のパスワード',
-              ),
-              obscureText: true,
-            ),
             const SizedBox(height: 32),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
               onPressed: () async {
                 await _saveMailSettings();
-                await debugShowMailSettings(context); // ここでデバッグ用に保存値を確認
               },
               child: const Text('保存', style: TextStyle(color: Colors.white)),
             ),
@@ -1020,6 +1016,7 @@ class _MailSettingsPageState extends State<MailSettingsPage> {
     );
   }
 }
+
 
 // デバッグ用：保存した値を表示する関数
 Future<void> debugShowMailSettings(BuildContext context) async {
