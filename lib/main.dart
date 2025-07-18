@@ -989,6 +989,7 @@ Future<int> insertTimeStudy(int taskId, String start, String stop, int helpno) a
     'start': start,
     'stop': stop,
     'helpno': helpno,
+    'sent': 0,
   });
 }
 
