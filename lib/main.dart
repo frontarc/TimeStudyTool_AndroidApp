@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
-import 'dart:async'; // ←★これがTimer用
+import 'dart:async'; // Timer用
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:convert';
-import 'package:csv/csv.dart'; // ←★これがCsvToListConverter/ListToCsvConverter用
+import 'package:csv/csv.dart'; // CsvToListConverter/ListToCsvConverter用
 import 'package:fl_chart/fl_chart.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mailer/mailer.dart';
 import 'package:mailer/smtp_server.dart';
-import 'package:http/http.dart' as http; // ★API通信用
+import 'package:http/http.dart' as http; // API通信用
+import 'package:intl/intl.dart';
 
 
 //sqlite構成
@@ -534,7 +535,7 @@ Future<void> sendLatestCsvBySmtp(BuildContext context) async {
   }
 }
 
-//3-1.機能：作業時間表示
+//3-1.機能：作業時間表示　※有料版
 class TimeDisplayPage extends StatelessWidget {
   const TimeDisplayPage({super.key});
 
@@ -548,7 +549,14 @@ class TimeDisplayPage extends StatelessWidget {
       body: Center(
         child: ElevatedButton(
           onPressed: () async {
-            final data = await _loadCsvData();
+            final filePath = await _findLatestCsvFile();
+            if (filePath == null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('CSVデータがありません')),
+              );
+              return;
+            }
+            final data = await _loadCsvData(filePath);
             if (data.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('計測データがありません')),
@@ -575,42 +583,59 @@ class TimeDisplayPage extends StatelessWidget {
     );
   }
 
-  // 3-2.機能：DBを読み込んでデータを抽出
-  Future<List<_TaskBarData>> _loadCsvData() async {
-    final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/time_study_data.csv';
-    final file = File(path);
+  Future<String?> _findLatestCsvFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final files = Directory(dir.path)
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.csv'))
+        .toList();
 
+    if (files.isEmpty) return null;
+    files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+    return files.first.path;
+  }
+
+  // 3-2.機能：DBを読み込んでデータを抽出　※有料版
+
+  Future<List<_TaskBarData>> _loadCsvData(String filePath) async {
+    final file = File(filePath);
     if (!file.existsSync()) return [];
 
     final csvStr = await file.readAsString(encoding: utf8);
     final rows = const CsvToListConverter().convert(csvStr, eol: '\n');
 
-    // ヘッダー確認
+    // ヘッダー取得
     final header = rows.isNotEmpty ? rows.first : [];
-    final isValid = header.length >= 4 && header[0] == "task_id";
-    if (!isValid) return [];
+    final idxTaskName = header.indexOf("task_name");
+    final idxStart = header.indexOf("start");
+    final idxStop = header.indexOf("stop");
+    if (idxTaskName == -1 || idxStart == -1 || idxStop == -1) return [];
 
-    // データ抽出
     final List<_TaskBarData> list = [];
     for (int i = 1; i < rows.length; i++) {
       final row = rows[i];
-      if (row.length < 4) continue;
-      final taskName = row[1].toString();
-      final startStr = row[2].toString();
-      final stopStr = row[3].toString();
+      if (row.length < header.length) continue;
+      final taskName = row[idxTaskName].toString();
+      final startStr = row[idxStart].toString();
+      final stopStr = row[idxStop].toString();
 
       try {
-        final start = DateFormat('HH:mm:ss').parse(startStr);
-        final stop = DateFormat('HH:mm:ss').parse(stopStr);
+        // ISO 8601形式の日付としてパース
+        final start = DateTime.parse(startStr);
+        final stop = DateTime.parse(stopStr);
         final duration = stop.difference(start).inSeconds;
-        final label = "$startStr\n$taskName";
-        list.add(_TaskBarData(label, duration));
-      } catch (_) {}
+        list.add(_TaskBarData(taskName, duration));
+      } catch (e) {
+        print('parse error: $e, start=$startStr, stop=$stopStr');
+      }
     }
     return list;
   }
 }
+
+
+
 
 // グラフ用データクラス
 class _TaskBarData {
