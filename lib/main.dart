@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'dart:async'; // Timer用
-import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -12,7 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mailer/mailer.dart';
 import 'package:mailer/smtp_server.dart';
 import 'package:http/http.dart' as http; // API通信用
-import 'package:intl/intl.dart';
+
 
 
 //sqlite構成
